@@ -5,6 +5,14 @@ A simple in-memory Redis-like server built in Go.
 ## Running the Server
 
 To run the server, execute:
+```bash
+go run server.go
+```
+To use the client, execute:
+
+```bash
+go run client.go
+```
 
 ## RESP BASIC DESCRIPTION
 
@@ -78,7 +86,6 @@ https://redis.io/docs/latest/commands/zrange/
 
 
 
-```bash
-go run server.go
+
 
 
