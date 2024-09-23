@@ -8,8 +8,6 @@ To run the server, execute:
 
 ## RESP BASIC DESCRIPTION
 
-/*
-
 
 REDIS Assignment
 
@@ -77,9 +75,6 @@ ZADD key [NX | XX] [GT | LT] [CH] [INCR] score member [score member ...]
 
 -> ZRANGE
 https://redis.io/docs/latest/commands/zrange/
-
-
-*/
 
 
 
