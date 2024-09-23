@@ -76,6 +76,22 @@ func readRespResponse(reader *bufio.Reader) (string, error) {
 			return "", err
 		}
 		return string(data[:length]), nil
+	case '*':
+		lengthStr := strings.TrimSpace(line[1:])
+		length, err := strconv.Atoi(lengthStr)
+		if err != nil {
+			return "", err
+		}
+
+		results := make([]string, length)
+		for i := 0; i < length; i++ {
+			data, err := readRespResponse(reader)
+			if err != nil {
+				return "", err
+			}
+			results[i] = data
+		}
+		return fmt.Sprintf("[%s]", strings.Join(results, ", ")), nil
 	default:
 		return "", fmt.Errorf("unexpected response type: %s", line)
 	}
