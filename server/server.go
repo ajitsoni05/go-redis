@@ -108,21 +108,57 @@ func handleGet(conn net.Conn, cmd []string) {
 }
 
 func handleSet(conn net.Conn, cmd []string) {
-	if len(cmd) != 3 {
+	if len(cmd) < 3 {
 		conn.Write([]byte(resp.EncodeError("ERR wrong number of arguments for 'SET' command")))
 		return
 	}
 
-	fmt.Println("SET", cmd)
 	key, value := cmd[1], cmd[2]
 
-	// Handling Concurrency
+	var expirationDuration time.Duration
+	expire := false
+
+	if len(cmd) >= 5 {
+		if cmd[3] == "EX" {
+			// seconds
+			seconds, err := strconv.Atoi(cmd[4])
+			if err != nil {
+				conn.Write([]byte(resp.EncodeError("ERR invalid expiration time")))
+				return
+			}
+			expire = true
+			expirationDuration = time.Duration(seconds) * time.Second
+		} else if cmd[3] == "PX" {
+			// milliseconds
+			milliseconds, err := strconv.Atoi(cmd[4])
+			if err != nil {
+				conn.Write([]byte(resp.EncodeError("ERR invalid expiration time")))
+				return
+			}
+			expire = true
+			expirationDuration = time.Duration(milliseconds) * time.Millisecond
+		} else {
+			conn.Write([]byte(resp.EncodeError("ERR syntax error")))
+			return
+		}
+
+	}
+	// Handling concurrency for database write
 	dbMutex.Lock()
-	// Simply assign the value to the key
+	// Set the key-value pair in the database
 	db[key] = value
+
+	// Set expiration time if provided
+	if expire {
+		ttl[key] = time.Now().Add(expirationDuration)
+	} else {
+		// If no expiration is provided, remove it from ttl (it's a permanent key)
+		delete(ttl, key)
+	}
 	dbMutex.Unlock()
 
 	conn.Write([]byte(resp.EncodeSimpleString("OK")))
+
 }
 
 func handleDel(conn net.Conn, cmd []string) {
@@ -174,6 +210,14 @@ func handleExpire(conn net.Conn, cmd []string) {
 }
 
 func handleTTL(conn net.Conn, cmd []string) {
+	// Command length check | Should be equal to 2
+	/*
+		Example Usage :
+			 TTL keyname
+		Output:
+		(integer) 2000
+
+	*/
 	if len(cmd) != 2 {
 		conn.Write([]byte(resp.EncodeError("ERR wrong number of arguments for 'TTL' command")))
 		return
