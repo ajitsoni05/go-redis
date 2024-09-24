@@ -57,41 +57,50 @@ func readRespResponse(reader *bufio.Reader) (string, error) {
 	}
 
 	switch line[0] {
-	case '+', ':', '-':
+	case '+': // Simple String
+		return strings.TrimSpace(line[1:]), nil
+	case '-': // Error
 		return strings.TrimSpace(line), nil
-	case '$':
+	case ':': // Integer (handle "(integer) x" format)
+		value, err := strconv.Atoi(strings.TrimSpace(line[1:]))
+		if err != nil {
+			return "", err
+		}
+		return fmt.Sprintf("(integer) %d", value), nil
+	case '$': // Bulk String
 		lengthStr := strings.TrimSpace(line[1:])
 		length, err := strconv.Atoi(lengthStr)
 		if err != nil {
 			return "", err
 		}
-
 		if length == -1 {
 			return "(nil)", nil
 		}
 
-		data := make([]byte, length+2)
+		data := make([]byte, length+2) // Read the bulk string and the trailing \r\n
 		_, err = reader.Read(data)
 		if err != nil {
 			return "", err
 		}
 		return string(data[:length]), nil
-	case '*':
-		lengthStr := strings.TrimSpace(line[1:])
-		length, err := strconv.Atoi(lengthStr)
+	case '*': // Array
+		length, err := strconv.Atoi(strings.TrimSpace(line[1:]))
 		if err != nil {
 			return "", err
 		}
+		if length == -1 {
+			return "(nil)", nil
+		}
 
-		results := make([]string, length)
+		array := make([]string, length)
 		for i := 0; i < length; i++ {
-			data, err := readRespResponse(reader)
+			elem, err := readRespResponse(reader)
 			if err != nil {
 				return "", err
 			}
-			results[i] = data
+			array[i] = elem
 		}
-		return fmt.Sprintf("[%s]", strings.Join(results, ", ")), nil
+		return fmt.Sprintf("%v", array), nil
 	default:
 		return "", fmt.Errorf("unexpected response type: %s", line)
 	}

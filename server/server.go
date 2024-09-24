@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"go-redis/resp"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,7 +35,7 @@ func handleConnection(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 
 	for {
-		// Decode client request (RESP array)
+		// Decode client request (RESP array) int array of commands
 		cmd, err := resp.DecodeArray(reader)
 		if err != nil {
 			conn.Write([]byte(resp.EncodeError("ERR invalid request")))
@@ -51,6 +52,7 @@ func handleConnection(conn net.Conn) {
 		}
 
 		command := strings.ToUpper(cmd[0])
+		// Based on the first word in the cmd array go to the handler
 		switch command {
 		case "GET":
 			handleGet(conn, cmd)
@@ -75,11 +77,13 @@ func handleConnection(conn net.Conn) {
 }
 
 func handleGet(conn net.Conn, cmd []string) {
+	// get command should consist of two elements | Make a check here
 	if len(cmd) != 2 {
 		conn.Write([]byte(resp.EncodeError("ERR wrong number of arguments for 'GET' command")))
 		return
 	}
 
+	// 0th element in command is GET and 1st element is the key to which value is to be found out
 	key := cmd[1]
 
 	// Handling Concurrency
@@ -88,8 +92,11 @@ func handleGet(conn net.Conn, cmd []string) {
 	dbMutex.Unlock()
 
 	if ok {
+		// Check if the expiration exists for the key and whether expiration time has exceeded current time
 		if expiration, exists := ttl[key]; exists && time.Now().After(expiration) {
+			// delete the specified key from db datasore
 			delete(db, key)
+			// delete the expiration for the key from TTL datastore
 			delete(ttl, key)
 			conn.Write([]byte(resp.EncodeBulkString("")))
 		} else {
@@ -111,6 +118,7 @@ func handleSet(conn net.Conn, cmd []string) {
 
 	// Handling Concurrency
 	dbMutex.Lock()
+	// Simply assign the value to the key
 	db[key] = value
 	dbMutex.Unlock()
 
@@ -124,6 +132,11 @@ func handleDel(conn net.Conn, cmd []string) {
 	}
 
 	deleted := 0
+	/*
+		DEL keyword can be used for deleting multiple keys at once
+		so in below logic we are deleting the db entries and the ttl entries
+		associated with the corresponding keys
+	*/
 	for _, key := range cmd[1:] {
 		if _, ok := db[key]; ok {
 			delete(db, key)
@@ -151,6 +164,7 @@ func handleExpire(conn net.Conn, cmd []string) {
 	_, exists := db[key]
 	dbMutex.Unlock()
 
+	// If the key exists , new expiration time will be set as the time given from the current time
 	if exists {
 		ttl[key] = time.Now().Add(time.Duration(expirySeconds) * time.Second)
 		conn.Write([]byte(resp.EncodeInteger(1)))
@@ -315,16 +329,20 @@ func main() {
 		fmt.Println("Error:", err)
 		return
 	}
+	// listener closure at the end
 	defer ln.Close()
 
-	fmt.Println("Server started on :6378")
+	// Print statement to indicate that server is started on port 8020
+	fmt.Println("Server started on :8020")
 
+	// While loop for handling the connection
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
 			fmt.Println("Error:", err)
 			continue
 		}
+		// asynchronous connection handling
 		go handleConnection(conn)
 	}
 }
