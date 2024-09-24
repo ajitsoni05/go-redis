@@ -98,7 +98,7 @@ func handleGet(conn net.Conn, cmd []string) {
 			delete(db, key)
 			// delete the expiration for the key from TTL datastore
 			delete(ttl, key)
-			conn.Write([]byte(resp.EncodeBulkString("")))
+			conn.Write([]byte(resp.EncodeBulkString("(nil)")))
 		} else {
 			conn.Write([]byte(resp.EncodeBulkString(value)))
 		}
@@ -228,6 +228,7 @@ func handleTTL(conn net.Conn, cmd []string) {
 		if time.Now().After(expiration) {
 			conn.Write([]byte(resp.EncodeInteger(-2)))
 		} else {
+			// Simple subtraction logic to indicate time remaining
 			ttlRemaining := int(expiration.Sub(time.Now()).Seconds())
 			conn.Write([]byte(resp.EncodeInteger(ttlRemaining)))
 		}
@@ -280,38 +281,57 @@ func matchesPattern(key string, pattern string) bool {
 }
 
 func handleZAdd(conn net.Conn, cmd []string) {
+
+	/*
+		 Following check on commands are based on two conditions:
+		1. length of the command should not be less than 4 becuz, we need to add atleast 1 member with its scode
+		ex :  zadd mysortedset 1 "a"
+		2. after the first two members of the command i.e. zadd , mysortedset . The number of following arguemtns key ,scode is
+		always even so we check that.
+
+	*/
 	if len(cmd) < 4 || (len(cmd)-2)%2 != 0 {
 		conn.Write([]byte(resp.EncodeError("ERR wrong number of arguments for 'ZADD' command")))
 		return
 	}
 
 	key := cmd[1]
+	// Lock the  db datastore for manipulation of key in sortedSets
 	dbMutex.Lock()
+	// add the key into sorted set if not already present
 	if sortedSets[key] == nil {
 		sortedSets[key] = &SortedSet{members: make(map[string]float64)}
 	}
+	// else get the corresponding  sortedset
 	set := sortedSets[key]
 
 	added := 0
+	// get the keys and scores to be added/updated in the data store
 	for i := 2; i < len(cmd); i += 2 {
+		// score can be a floating value as well
 		score, err := strconv.ParseFloat(cmd[i], 64)
 		if err != nil {
 			conn.Write([]byte(resp.EncodeError("ERR invalid score")))
 			dbMutex.Unlock()
 			return
 		}
+		// member would be next index to score
 		member := cmd[i+1]
+		// add the member to the corresponding set members
 		if _, exists := set.members[member]; !exists {
 			added++
 		}
+		// update the score
 		set.members[member] = score
 	}
 
+	// Unlok after the keys are released
 	dbMutex.Unlock()
 	conn.Write([]byte(resp.EncodeInteger(added)))
 }
 
 func handleZRange(conn net.Conn, cmd []string) {
+	// Check on the length of the command | if its not equal to 4 , then its invalid
 	if len(cmd) != 4 {
 		conn.Write([]byte(resp.EncodeError("ERR wrong number of arguments for 'ZRANGE' command")))
 		return
