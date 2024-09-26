@@ -114,51 +114,121 @@ func handleSet(conn net.Conn, cmd []string) {
 	}
 
 	key, value := cmd[1], cmd[2]
+	var (
+		nx       = false
+		xx       = false
+		get      = false
+		expiry   time.Duration
+		expireAt time.Time
+		keepttl  = false
+	)
 
-	var expirationDuration time.Duration
-	expire := false
-
-	if len(cmd) >= 5 {
-		if cmd[3] == "EX" {
-			// seconds
-			seconds, err := strconv.Atoi(cmd[4])
-			if err != nil {
-				conn.Write([]byte(resp.EncodeError("ERR invalid expiration time")))
+	// Parsing options
+	i := 3
+	for i < len(cmd) {
+		switch strings.ToUpper(cmd[i]) {
+		case "NX":
+			nx = true
+		case "XX":
+			xx = true
+		case "GET":
+			get = true
+		case "EX":
+			if i+1 >= len(cmd) {
+				conn.Write([]byte(resp.EncodeError("ERR syntax error")))
 				return
 			}
-			expire = true
-			expirationDuration = time.Duration(seconds) * time.Second
-		} else if cmd[3] == "PX" {
-			// milliseconds
-			milliseconds, err := strconv.Atoi(cmd[4])
-			if err != nil {
-				conn.Write([]byte(resp.EncodeError("ERR invalid expiration time")))
+			seconds, err := strconv.Atoi(cmd[i+1])
+			if err != nil || seconds <= 0 {
+				conn.Write([]byte(resp.EncodeError("ERR invalid expire time in SET")))
 				return
 			}
-			expire = true
-			expirationDuration = time.Duration(milliseconds) * time.Millisecond
-		} else {
+			expiry = time.Duration(seconds) * time.Second
+			i++
+		case "PX":
+			if i+1 >= len(cmd) {
+				conn.Write([]byte(resp.EncodeError("ERR syntax error")))
+				return
+			}
+			milliseconds, err := strconv.Atoi(cmd[i+1])
+			if err != nil || milliseconds <= 0 {
+				conn.Write([]byte(resp.EncodeError("ERR invalid expire time in SET")))
+				return
+			}
+			expiry = time.Duration(milliseconds) * time.Millisecond
+			i++
+		case "EXAT":
+			if i+1 >= len(cmd) {
+				conn.Write([]byte(resp.EncodeError("ERR syntax error")))
+				return
+			}
+			unixTime, err := strconv.ParseInt(cmd[i+1], 10, 64)
+			if err != nil || unixTime <= 0 {
+				conn.Write([]byte(resp.EncodeError("ERR invalid Unix time")))
+				return
+			}
+			expireAt = time.Unix(unixTime, 0)
+			i++
+		case "PXAT":
+			if i+1 >= len(cmd) {
+				conn.Write([]byte(resp.EncodeError("ERR syntax error")))
+				return
+			}
+			unixTimeMs, err := strconv.ParseInt(cmd[i+1], 10, 64)
+			if err != nil || unixTimeMs <= 0 {
+				conn.Write([]byte(resp.EncodeError("ERR invalid Unix time")))
+				return
+			}
+			expireAt = time.Unix(0, unixTimeMs*int64(time.Millisecond))
+			i++
+		case "KEEPTTL":
+			keepttl = true
+		default:
 			conn.Write([]byte(resp.EncodeError("ERR syntax error")))
 			return
 		}
-
+		i++
 	}
 	// Handling concurrency for database write
 	dbMutex.Lock()
-	// Set the key-value pair in the database
+	defer dbMutex.Unlock()
+
+	oldValue, exists := db[key]
+	if nx && exists {
+		// NX: Only set if the key does not exist
+		conn.Write([]byte(resp.EncodeBulkString("")))
+		return
+	}
+	if xx && !exists {
+		// XX: Only set if the key already exists
+		conn.Write([]byte(resp.EncodeBulkString("(nil)")))
+		return
+	}
+
+	// Handle the GET option: Return the old value before overwriting
+	if get {
+		if exists {
+			conn.Write([]byte(resp.EncodeBulkString(oldValue)))
+		} else {
+			conn.Write([]byte(resp.EncodeBulkString("(nil)")))
+		}
+	}
+
+	// Set the new value
 	db[key] = value
 
-	// Set expiration time if provided
-	if expire {
-		ttl[key] = time.Now().Add(expirationDuration)
+	// Handle the expiry options
+	if keepttl && exists {
+		// KEEPTTL: Retain the existing TTL, do nothing
+	} else if !expireAt.IsZero() {
+		ttl[key] = expireAt
+	} else if expiry > 0 {
+		ttl[key] = time.Now().Add(expiry)
 	} else {
-		// If no expiration is provided, remove it from ttl (it's a permanent key)
-		delete(ttl, key)
+		delete(ttl, key) // Remove TTL if no expiration is specified
 	}
-	dbMutex.Unlock()
 
 	conn.Write([]byte(resp.EncodeSimpleString("OK")))
-
 }
 
 func handleDel(conn net.Conn, cmd []string) {
