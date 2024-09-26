@@ -254,7 +254,7 @@ func handleDel(conn net.Conn, cmd []string) {
 }
 
 func handleExpire(conn net.Conn, cmd []string) {
-	if len(cmd) != 3 {
+	if len(cmd) < 3 || len(cmd) > 4 {
 		conn.Write([]byte(resp.EncodeError("ERR wrong number of arguments for 'EXPIRE' command")))
 		return
 	}
@@ -266,13 +266,49 @@ func handleExpire(conn net.Conn, cmd []string) {
 		return
 	}
 
+	var option string
+	if len(cmd) == 4 {
+		option = strings.ToUpper(cmd[3])
+		if option != "NX" && option != "XX" && option != "GT" && option != "LT" {
+			conn.Write([]byte(resp.EncodeError("ERR invalid option for 'EXPIRE' command")))
+			return
+		}
+	}
+
 	dbMutex.Lock()
+	existingTTL, hasTTL := ttl[key]
 	_, exists := db[key]
 	dbMutex.Unlock()
 
-	// If the key exists , new expiration time will be set as the time given from the current time
+	// Handle NX (Only set expiration if the key does not already exist)
+	if option == "NX" && hasTTL {
+		conn.Write([]byte(resp.EncodeInteger(0)))
+		return
+	}
+
+	// Handle XX (Only set expiration if the key already exists)
+	if option == "XX" && !hasTTL {
+		conn.Write([]byte(resp.EncodeInteger(0)))
+		return
+	}
+
+	// Handle GT (Only set expiration if the new expiry time is greater than the current one)
+	if option == "GT" && hasTTL && existingTTL.After(time.Now()) && existingTTL.Sub(time.Now()).Seconds() > float64(expirySeconds) {
+		conn.Write([]byte(resp.EncodeInteger(0)))
+		return
+	}
+
+	// Handle LT (Only set expiration if the new expiry time is less than the current one)
+	if option == "LT" && hasTTL && existingTTL.After(time.Now()) && existingTTL.Sub(time.Now()).Seconds() < float64(expirySeconds) {
+		conn.Write([]byte(resp.EncodeInteger(0)))
+		return
+	}
+
+	// If the key exists, set the new expiration time
 	if exists {
+		dbMutex.Lock()
 		ttl[key] = time.Now().Add(time.Duration(expirySeconds) * time.Second)
+		dbMutex.Unlock()
 		conn.Write([]byte(resp.EncodeInteger(1)))
 	} else {
 		conn.Write([]byte(resp.EncodeInteger(0)))
